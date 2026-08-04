@@ -47,9 +47,9 @@
 #include <memory>
 #include <mutex>
 
-#ifdef __ANDROID_APEX__
+//#ifdef __ANDROID_APEX__
 #include <android-base/properties.h>
-#endif
+//#endif
 
 namespace android {
 
@@ -1064,7 +1064,8 @@ private:
                     me.set().allocFlags = defaultFlags;
                     me.set().minAlignment = defaultAlign;
 #else
-                    me.set().heapMask = ~0;
+                    me.set().heapMask = base::GetIntProperty(
+                                "ro.com.android.media.swcodec.ion.heapmask", int32_t(0xFFFFFFFF));
                     me.set().allocFlags = 0;
                     me.set().minAlignment = 0;
 #endif
