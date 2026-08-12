@@ -1275,8 +1275,7 @@ void CCodec::initiateAllocateComponent(const sp<AMessage> &msg) {
 
 void CCodec::allocate(const sp<MediaCodecInfo> &codecInfo) {
     pid_t clientPid = AIBinder_getCallingPid();
-    ALOGE("[AppTracker_CCodec] App: %s (PID: %d, UID: %d)",
-          processName.c_str(), clientPid, clientUid);
+    ALOGE("[AppTracker_CCodec] App PID: %d",clientPid);
     C2StreamAppPidInfo appPidParam(clientPid);
     std::vector<C2Param *> configParams{ &appPidParam };
     std::vector<std::unique_ptr<C2SettingResult>> failures;
