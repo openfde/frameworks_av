@@ -17,7 +17,7 @@ cc_library {
     ],
 
     static_libs: ["libavcdec"],
-
+    shared_libs: ["libbinder_ndk"],
     cflags: [
         "-DKEEP_THREADS_ACTIVE=1",
     ],

@@ -20,6 +20,14 @@
 #include <sys/time.h>
 #include <inttypes.h>
 
+#include <C2ParamDef.h>
+
+enum C2CustomParamIndex : uint32_t {
+    kParamIndexAppPid = C2Param::TYPE_INDEX_VENDOR_START + 0x100,
+};
+
+typedef C2GlobalParam<C2Tuning, C2Int32Value, kParamIndexAppPid> C2StreamAppPidInfo;
+
 #include <media/stagefright/foundation/ColorUtils.h>
 
 #include <atomic>
@@ -41,6 +49,8 @@ namespace android {
 #define ivdext_ctl_get_vui_params_ip_t  ih264d_ctl_get_vui_params_ip_t
 #define ivdext_ctl_get_vui_params_op_t  ih264d_ctl_get_vui_params_op_t
 #define ALIGN128(x)                     ((((x) + 127) >> 7) << 7)
+#define ALIGN512(x)                     ((((x) + 511) >> 9) << 9)
+
 #define MAX_NUM_CORES                   4
 #define IVDEXT_CMD_CTL_SET_NUM_CORES    \
         (IVD_CONTROL_API_COMMAND_TYPE_T)IH264D_CMD_CTL_SET_NUM_CORES
@@ -138,6 +148,7 @@ private:
     status_t resetDecoder();
     void resetPlugin();
     status_t deleteDecoder();
+    std::string getAppNameByPid(int32_t pid);
 
     std::shared_ptr<IntfImpl> mIntf;
 
@@ -153,6 +164,7 @@ private:
     iv_obj_t *mDecHandle;
     std::shared_ptr<C2GraphicBlock> mOutBlock;
     uint8_t *mOutBufferFlush;
+    std::string mAppName{""};
 
     size_t mNumCores;
     IV_COLOR_FORMAT_T mIvColorFormat;

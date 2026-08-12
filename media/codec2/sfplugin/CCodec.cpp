@@ -67,6 +67,9 @@
 #include "CCodecConfig.h"
 #include "Codec2Mapper.h"
 #include "InputSurfaceWrapper.h"
+#include <android/binder_ibinder.h>
+#include <fstream>
+#include <string>
 
 namespace android {
 
@@ -78,6 +81,12 @@ using ::aidl::android::media::IAidlNode;
 using ::android::media::AidlGraphicBufferSource;
 using ::android::media::WAidlGraphicBufferSource;
 using ::android::media::aidl_conversion::fromAidlStatus;
+
+enum C2CustomParamIndex : uint32_t {
+    kParamIndexAppPid = C2Param::TYPE_INDEX_VENDOR_START + 0x100,
+};
+
+typedef C2GlobalParam<C2Tuning, C2Int32Value, kParamIndexAppPid> C2StreamAppPidInfo;
 
 typedef hardware::media::omx::V1_0::IGraphicBufferSource HGraphicBufferSource;
 typedef aidl::android::media::IAidlGraphicBufferSource AGraphicBufferSource;
@@ -1265,6 +1274,13 @@ void CCodec::initiateAllocateComponent(const sp<AMessage> &msg) {
 }
 
 void CCodec::allocate(const sp<MediaCodecInfo> &codecInfo) {
+    pid_t clientPid = AIBinder_getCallingPid();
+    ALOGE("[AppTracker_CCodec] App: %s (PID: %d, UID: %d)",
+          processName.c_str(), clientPid, clientUid);
+    C2StreamAppPidInfo appPidParam(clientPid);
+    std::vector<C2Param *> configParams{ &appPidParam };
+    std::vector<std::unique_ptr<C2SettingResult>> failures;
+
     if (codecInfo == nullptr) {
         mCallback->onError(UNKNOWN_ERROR, ACTION_CODE_FATAL);
         return;
@@ -1315,6 +1331,10 @@ void CCodec::allocate(const sp<MediaCodecInfo> &codecInfo) {
         mClient = client;
         return OK;
     };
+    if (comp) {
+        comp->config(configParams, C2_MAY_BLOCK, &failures);
+        ALOGW("comp config configParams for clientPid: %d", clientPid);
+    }
     if (tryAndReportOnError(setAllocated) != OK) {
         return;
     }
