@@ -161,6 +161,11 @@ class DeviceHalHidl : public DeviceHalInterface, public CoreConversionHelperHidl
         return INVALID_OPERATION;
     }
 
+    status_t getDevs(bool input, String8 *result) override;
+    status_t setDevVolume(bool input, const String8& devName, float volume) override;
+    status_t setDevMute(bool input, const String8& devName, bool mute) override;
+    status_t setDefaultDev(bool input, const String8& devName, bool needInfo, String8 *result) override;
+
   private:
     friend class DevicesFactoryHalHidl;
     sp<::android::hardware::audio::CPP_VERSION::IDevice> mDevice;

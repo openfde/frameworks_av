@@ -405,6 +405,11 @@ public:
             int module,
             const media::audio::common::AudioPortConfig& config,
             media::audio::common::FlushFromFrameSupport* support) = 0;
+
+    virtual String8 getDevs(bool input) const = 0;
+    virtual status_t setDevVolume(bool input, const String8& devName, float volume) const = 0;
+    virtual status_t setDevMute(bool input, const String8& devName, bool mute) const = 0;
+    virtual String8 setDefaultDev(bool input, const String8& devName, bool needInfo) const = 0;
 };
 
 /**
@@ -529,6 +534,10 @@ public:
             int module,
             const media::audio::common::AudioPortConfig& config,
             media::audio::common::FlushFromFrameSupport *support) override;
+    String8 getDevs(bool input) const override;
+    status_t setDevVolume(bool input, const String8& devName, float volume) const override;
+    status_t setDevMute(bool input, const String8& devName, bool mute) const override;
+    String8 setDefaultDev(bool input, const String8& devName, bool needInfo) const override;
 
 private:
     const sp<media::IAudioFlingerService> mDelegate;
@@ -633,6 +642,10 @@ public:
                     media::BnAudioFlingerService::TRANSACTION_resetReferencesForTest,
             GET_FLUSH_FROM_FRAME_SUPPORT =
                     media::BnAudioFlingerService::TRANSACTION_getFlushFromFrameSupport,
+            GET_DEVS = media::BnAudioFlingerService::TRANSACTION_getDevs,
+            SET_DEV_VOLUME = media::BnAudioFlingerService::TRANSACTION_setDevVolume,
+            SET_DEV_MUTE = media::BnAudioFlingerService::TRANSACTION_setDevMute,
+            SET_DEFAULT_DEV = media::BnAudioFlingerService::TRANSACTION_setDefaultDev,
         };
 
     protected:
@@ -775,6 +788,11 @@ public:
             int module,
             const media::audio::common::AudioPortConfig& config,
             media::audio::common::FlushFromFrameSupport* _aidl_return) override;
+    Status getDevs(bool input, std::string* _aidl_return) override;
+    Status setDevVolume(bool input, const std::string& devName, float volume) override;
+    Status setDevMute(bool input, const std::string& devName, bool mute) override;
+    Status setDefaultDev(bool input, const std::string& devName, bool needInfo, std::string* _aidl_return) override;
+
 private:
     const sp<AudioFlingerServerAdapter::Delegate> mDelegate;
 };
