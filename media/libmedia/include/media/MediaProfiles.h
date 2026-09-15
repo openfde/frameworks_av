@@ -616,6 +616,17 @@ private:
      */
     void checkAndAddRequiredProfilesIfNecessary();
 
+    static bool qualitySupported(camcorder_quality quality, std::string info = "");
+    static int getMaxFps();
+    static void maybeUpdateCameraInfo(MediaProfiles* profiles);
+    static void updateCameraInfo(MediaProfiles* profiles);
+    bool isCameraActive(int cameraId) const;
+    bool isProfileActive(int cameraId, camcorder_quality quality) const;
+    void markProfileActive(int cameraId, camcorder_quality quality);
+    int getEffectiveCameraId(int cameraId) const;
+    CamcorderProfile *findProfileInPoolLocked(int cameraId, camcorder_quality quality) const;
+    CamcorderProfile *addProfileToPoolLocked(CamcorderProfile *profile, bool active);
+    ImageEncodingQualityLevels *findImageEncodingQualityLevelsLocked(int cameraId) const;
 
     // Mappings from name (for instance, codec name) to enum value
     static const NameToTagMap sVideoEncoderNameMap[];
@@ -631,6 +642,21 @@ private:
     static MediaProfiles *sInstance;
     static Mutex sLock;
     int mCurrentCameraId;
+
+    static constexpr size_t kMaxPhysicalCameraCount = 4;
+    /*
+     * Pool sizing: 4 USB cameras plus their shadow ids = at most 8 camera ids,
+     * each holding up to 8 qualities (4 from media_profiles.xml plus the 4
+     * qualities synthesized by checkAndAddRequiredProfilesIfNecessary()).
+     */
+    static constexpr size_t kMaxCamcorderProfilePool = (kMaxPhysicalCameraCount * 2) * (4 + 4);
+    struct ProfileKey {
+        int cameraId;
+        camcorder_quality quality;
+    };
+    ProfileKey mActiveProfileKeys[kMaxCamcorderProfilePool];
+    size_t mActiveProfileKeyCount = 0;
+    Vector<CamcorderProfile*> mDefalutCamcorderProfiles;
 
     Vector<CamcorderProfile*> mCamcorderProfiles;
     Vector<AudioEncoderCap*>  mAudioEncoders;
@@ -652,8 +678,9 @@ private:
         int mCameraId;
     } RequiredProfiles;
 
-    RequiredProfiles *mRequiredProfileRefs;
+    RequiredProfiles *mRequiredProfileRefs = nullptr;
     Vector<int>              mCameraIds;
+    static std::string sCameraInfo;
 };
 
 }; // namespace android

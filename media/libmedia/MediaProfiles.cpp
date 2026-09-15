@@ -36,7 +36,7 @@
 #include <array>
 #include <string>
 #include <vector>
-
+#include <regex>
 #include <android_media_mediarecorder.h>
 
 namespace android {
@@ -82,11 +82,53 @@ std::array<char const*, 5> const& getXmlPaths() {
     return cPaths;
 }
 
+std::tuple<int, int, int> parseCameraInfo(camcorder_quality quality, std::string info) {
+    int width = 0;
+    int height = 0;
+    int maxFps = 0;
+    std::regex capturePattern;
+    std::smatch match;
+    switch (quality) {
+        case CAMCORDER_QUALITY_1080P:
+            width = 1920;
+            height = 1080;
+            capturePattern = R"(1920x1080@(\d+))";
+            std::regex_search(info, match, capturePattern);
+            maxFps = std::stoi(match[1]);
+            break;
+        case CAMCORDER_QUALITY_720P:
+            width = 1280;
+            height = 720;
+            capturePattern = R"(1280x720@(\d+))";
+            std::regex_search(info, match, capturePattern);
+            maxFps = std::stoi(match[1]);
+            break;
+        case CAMCORDER_QUALITY_480P:
+            width = 640;
+            height = 480;
+            capturePattern = R"(640x480@(\d+))";
+            std::regex_search(info, match, capturePattern);
+            maxFps = std::stoi(match[1]);
+            break;
+        case CAMCORDER_QUALITY_QVGA:
+            width = 320;
+            height = 240;
+            capturePattern = R"(320x240@(\d+))";
+            std::regex_search(info, match, capturePattern);
+            maxFps = std::stoi(match[1]);
+            break;
+        default:
+            ALOGE("error!!");
+    }
+    return {width, height, maxFps};
+}
+
 } // unnamed namespace
 
 Mutex MediaProfiles::sLock;
 bool MediaProfiles::sIsInitialized = false;
 MediaProfiles *MediaProfiles::sInstance = NULL;
+std::string MediaProfiles::sCameraInfo = "nonenone";
 
 const MediaProfiles::NameToTagMap MediaProfiles::sVideoEncoderNameMap[] = {
     {"h263", VIDEO_ENCODER_H263},
@@ -697,6 +739,98 @@ MediaProfiles::createCamcorderProfile(
     return profile;
 }
 
+bool MediaProfiles::isCameraActive(int cameraId) const
+{
+    const size_t count = mActiveProfileKeyCount;
+    for (size_t i = 0; i < count && i < kMaxCamcorderProfilePool; ++i) {
+        if (mActiveProfileKeys[i].cameraId == cameraId) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool MediaProfiles::isProfileActive(int cameraId, camcorder_quality quality) const
+{
+    const size_t count = mActiveProfileKeyCount;
+    for (size_t i = 0; i < count && i < kMaxCamcorderProfilePool; ++i) {
+        if (mActiveProfileKeys[i].cameraId == cameraId &&
+            mActiveProfileKeys[i].quality == quality) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void MediaProfiles::markProfileActive(int cameraId, camcorder_quality quality)
+{
+    const size_t count = mActiveProfileKeyCount;
+    for (size_t i = 0; i < count; ++i) {
+        if (mActiveProfileKeys[i].cameraId == cameraId &&
+            mActiveProfileKeys[i].quality == quality) {
+            return;
+        }
+    }
+    if (count >= kMaxCamcorderProfilePool) {
+        ALOGE("%s: active key table is full, dropping camera %d quality %d",
+                __func__, cameraId, quality);
+        return;
+    }
+    mActiveProfileKeys[count].cameraId = cameraId;
+    mActiveProfileKeys[count].quality = quality;
+    mActiveProfileKeyCount = count + 1;
+}
+
+int MediaProfiles::getEffectiveCameraId(int cameraId) const
+{
+    if (isCameraActive(cameraId)) {
+        return cameraId;
+    }
+    for (int id = 0; id < kMaxPhysicalCameraCount * 2; id++) {
+        if (isCameraActive(id)) {
+            return id;
+        }
+    }
+    return -1;
+}
+
+MediaProfiles::CamcorderProfile *MediaProfiles::findProfileInPoolLocked(
+        int cameraId, camcorder_quality quality) const
+{
+    for (size_t i = 0, n = mCamcorderProfiles.size(); i < n; ++i) {
+        CamcorderProfile *profile = mCamcorderProfiles[i];
+        if (profile->mCameraId == cameraId && profile->mQuality == quality) {
+            return profile;
+        }
+    }
+    return nullptr;
+}
+
+MediaProfiles::CamcorderProfile *MediaProfiles::addProfileToPoolLocked(
+        CamcorderProfile *profile, bool active)
+{
+    if (profile == nullptr) {
+        return nullptr;
+    }
+    if (mCamcorderProfiles.capacity() < kMaxCamcorderProfilePool) {
+        mCamcorderProfiles.setCapacity(kMaxCamcorderProfilePool);
+    }
+    if (mCamcorderProfiles.size() >= kMaxCamcorderProfilePool) {
+        ALOGE("%s: profile pool is full (%zu entries), dropping camera %d quality %d",
+                __func__, mCamcorderProfiles.size(), profile->mCameraId, profile->mQuality);
+        return nullptr;
+    }
+    if (mCamcorderProfiles.add(profile) < 0) {
+        ALOGE("%s: cannot grow profile pool, dropping camera %d quality %d",
+                __func__, profile->mCameraId, profile->mQuality);
+        return nullptr;
+    }
+    if (active) {
+        markProfileActive(profile->mCameraId, profile->mQuality);
+    }
+    return profile;
+}
+
 MediaProfiles::ImageEncodingQualityLevels*
 MediaProfiles::findImageEncodingQualityLevels(int cameraId) const
 {
@@ -796,11 +930,13 @@ MediaProfiles::startElementHandler(void *userData, const char *name, const char 
         profiles->mCurrentCameraId = getCameraId(atts, natts);
         profiles->addStartTimeOffset(profiles->mCurrentCameraId, atts, natts);
     } else if (strcmp("EncoderProfile", name) == 0) {
-      MediaProfiles::CamcorderProfile* profile = createCamcorderProfile(
-          profiles->mCurrentCameraId, atts, natts, profiles->mCameraIds);
-      if (profile != nullptr) {
-        profiles->mCamcorderProfiles.add(profile);
-      }
+        MediaProfiles::CamcorderProfile* profile = createCamcorderProfile(
+            profiles->mCurrentCameraId, atts, natts, profiles->mCameraIds);
+        if (profile != nullptr) {
+            if (profiles->addProfileToPoolLocked(profile, true) == nullptr) {
+                delete profile;
+            }
+        }
     } else if (strcmp("ImageEncoding", name) == 0) {
         profiles->addImageEncodingQualityLevel(profiles->mCurrentCameraId, atts, natts);
     }
@@ -824,6 +960,9 @@ static bool isHighSpeedProfile(camcorder_quality quality) {
 void MediaProfiles::initRequiredProfileRefs(const Vector<int>& cameraIds) {
     ALOGV("Number of camera ids: %zu", cameraIds.size());
     CHECK(cameraIds.size() > 0);
+    if (mRequiredProfileRefs != nullptr) {
+        delete[] mRequiredProfileRefs;
+    }
     mRequiredProfileRefs = new RequiredProfiles[cameraIds.size()];
     for (size_t i = 0, n = cameraIds.size(); i < n; ++i) {
         mRequiredProfileRefs[i].mCameraId = cameraIds[i];
@@ -849,13 +988,15 @@ int MediaProfiles::getRequiredProfileRefIndex(int cameraId) {
 }
 
 void MediaProfiles::checkAndAddRequiredProfilesIfNecessary() {
-    if (sIsInitialized) {
-        return;
-    }
 
     initRequiredProfileRefs(mCameraIds);
 
     for (size_t i = 0, n = mCamcorderProfiles.size(); i < n; ++i) {
+        if (mCamcorderProfiles[i] == nullptr ||
+            !isProfileActive(mCamcorderProfiles[i]->mCameraId, mCamcorderProfiles[i]->mQuality)) {
+            continue;
+        }
+
         // ensure at least one video and audio profile is added
         if (mCamcorderProfiles[i]->mVideoCodecs.empty()) {
             mCamcorderProfiles[i]->mVideoCodecs.emplace_back(
@@ -960,11 +1101,9 @@ void MediaProfiles::checkAndAddRequiredProfilesIfNecessary() {
                         CHECK(!"Should never come here");
                 }
 
-                int index = getCamcorderProfileIndex(cameraId, profile->mQuality);
-                if (index != -1) {
+                if (isProfileActive(cameraId, profile->mQuality)) {
                     ALOGV("Profile quality %d for camera %d already exists",
                         profile->mQuality, cameraId);
-                    CHECK(index == refIndex);
                     continue;
                 }
 
@@ -973,7 +1112,141 @@ void MediaProfiles::checkAndAddRequiredProfilesIfNecessary() {
                         mCamcorderProfiles[info->mRefProfileIndex]->mQuality,
                         profile->mQuality, cameraId);
 
-                mCamcorderProfiles.add(profile.release());
+                CamcorderProfile *existing =
+                        findProfileInPoolLocked(cameraId, profile->mQuality);
+                if (existing != nullptr) {
+                    *existing = *profile;   // refresh content, keep the object
+                    markProfileActive(cameraId, profile->mQuality);
+                } else {
+                    CamcorderProfile *raw = profile.release();
+                    if (addProfileToPoolLocked(raw, true) == nullptr) {
+                        delete raw;
+                    }
+                }
+            }
+        }
+    }
+}
+
+void MediaProfiles::maybeUpdateCameraInfo(MediaProfiles* profiles)
+{
+    char cameraInfo[PROPERTY_VALUE_MAX];
+    property_get("fde.camera.info", cameraInfo, "nonenone");
+    if (strcmp(cameraInfo, "nonenone") == 0) {
+        int tryCount = 180;
+        while (tryCount--) {
+            sleep(1);
+            property_get("fde.camera.info", cameraInfo, "nonenone");
+            if (strcmp(cameraInfo, "nonenone")) {
+                break;
+            }
+        }
+    }
+    ALOGV("sCameraInfo: %s, cameraInfo: %s", sCameraInfo.c_str(), cameraInfo);
+    if (strcmp(cameraInfo, "nonenone") && strcmp(cameraInfo, "none") && strcmp(cameraInfo, sCameraInfo.c_str())) {
+        sCameraInfo = cameraInfo;
+        ALOGV("sCameraInfo: %s", sCameraInfo.c_str());
+        updateCameraInfo(profiles);
+        profiles->checkAndAddRequiredProfilesIfNecessary();
+    }
+}
+
+void MediaProfiles::updateCameraInfo(MediaProfiles* profiles)
+{
+    if (profiles->mDefalutCamcorderProfiles.isEmpty()) {
+        for (size_t i = 0; i < profiles->mCamcorderProfiles.size(); i++) {
+            profiles->mDefalutCamcorderProfiles.add(profiles->mCamcorderProfiles[i]);
+        }
+    }
+    profiles->mActiveProfileKeyCount = 0;
+
+    std::string delim(";");
+    size_t start = 0;
+    size_t end = sCameraInfo.find(delim);
+    std::vector<std::string> result;
+    if (end != std::string::npos) {
+        while (end != std::string::npos) {
+            result.push_back(sCameraInfo.substr(start, end - start));
+            start = end + delim.length();
+            end = sCameraInfo.find(delim, start);
+        }
+    }
+    result.push_back(sCameraInfo.substr(start));
+    profiles->mCameraIds.clear();
+    ImageEncodingQualityLevels *defaultLevels = nullptr;
+    if (!profiles->mImageEncodingQualityLevels.isEmpty()) {
+        defaultLevels = profiles->mImageEncodingQualityLevels[0];
+    }
+    for (const auto& dev : result) {
+        if (dev.size() < 2 || dev[0] != 'd') {
+            ALOGE("%s: unexpected entry \"%s\" in fde.camera.info", __func__, dev.c_str());
+            continue;
+        }
+        const int cameraId = std::stoi(dev.substr(1));
+        const std::string resolutionsProp = "fde.camera.info." + std::to_string(cameraId);
+        char resolutions[PROPERTY_VALUE_MAX];
+        property_get(resolutionsProp.c_str(), resolutions, "none");
+        const std::string info(resolutions);
+        const int ids[2] = { cameraId, cameraId + 1 };
+        for (int id : ids) {
+            profiles->mCameraIds.add(id);
+            profiles->addStartTimeOffset(id, nullptr, 0);
+
+            ImageEncodingQualityLevels *levels =
+                    profiles->findImageEncodingQualityLevels(id);
+            if (levels == nullptr) {
+                levels = new ImageEncodingQualityLevels();
+                levels->mCameraId = id;
+                profiles->mImageEncodingQualityLevels.add(levels);
+            }
+            if (defaultLevels != nullptr) {
+                levels->mLevels = defaultLevels->mLevels;
+            }
+        }
+        for (size_t i = 0; i < profiles->mDefalutCamcorderProfiles.size() && i < 4; i++) {
+            CamcorderProfile *currentProfile = profiles->mDefalutCamcorderProfiles[i];
+            if (currentProfile == nullptr || currentProfile->mVideoCodecs.empty() ||
+                currentProfile->mAudioCodecs.empty()) {
+                continue;
+            }
+            if (!qualitySupported(currentProfile->mQuality, info)) {
+                continue;
+            }
+            const std::tuple<int, int, int> t =
+                    parseCameraInfo(currentProfile->mQuality, info);
+            for (int id : ids) {
+                CamcorderProfile *camcorderProfile =
+                        profiles->findProfileInPoolLocked(id, currentProfile->mQuality);
+                if (camcorderProfile == nullptr) {
+                    camcorderProfile = new MediaProfiles::CamcorderProfile;
+                    camcorderProfile->mCameraId = id;
+                    camcorderProfile->mFileFormat = currentProfile->mFileFormat;
+                    camcorderProfile->mQuality = currentProfile->mQuality;
+                    camcorderProfile->mDuration = currentProfile->mDuration;
+                    VideoCodec videoCodec{
+                        currentProfile->mVideoCodecs[0].getCodec(),
+                        currentProfile->mVideoCodecs[0].getBitrate(),
+                        std::get<0>(t),
+                        std::get<1>(t),
+                        std::get<2>(t),
+                        currentProfile->mVideoCodecs[0].getProfile(),
+                        currentProfile->mVideoCodecs[0].getChromaSubsampling(),
+                        currentProfile->mVideoCodecs[0].getBitDepth(),
+                        currentProfile->mVideoCodecs[0].getHdrFormat()};
+                    camcorderProfile->mVideoCodecs.emplace_back(videoCodec);
+                    camcorderProfile->mAudioCodecs.emplace_back(currentProfile->mAudioCodecs[0]);
+                    if (profiles->addProfileToPoolLocked(camcorderProfile, true) == nullptr) {
+                        delete camcorderProfile;
+                        continue;
+                    }
+                } else {
+                    profiles->markProfileActive(id, currentProfile->mQuality);
+                    if (!camcorderProfile->mVideoCodecs.empty()) {
+                        camcorderProfile->mVideoCodecs[0].mFrameWidth = std::get<0>(t);
+                        camcorderProfile->mVideoCodecs[0].mFrameHeight = std::get<1>(t);
+                        camcorderProfile->mVideoCodecs[0].mFrameRate = std::get<2>(t);
+                    }
+                }
             }
         }
     }
@@ -1008,7 +1281,7 @@ MediaProfiles::getInstance()
         sInstance->checkAndAddRequiredProfilesIfNecessary();
         sIsInitialized = true;
     }
-
+    maybeUpdateCameraInfo(sInstance);
     return sInstance;
 }
 
@@ -1145,27 +1418,27 @@ MediaProfiles::createDefaultCamcorderProfiles(MediaProfiles *profiles)
     // low camcorder profiles.
     MediaProfiles::CamcorderProfile *lowProfile, *lowSpecificProfile;
     createDefaultCamcorderLowProfiles(&lowProfile, &lowSpecificProfile);
-    profiles->mCamcorderProfiles.add(lowProfile);
-    profiles->mCamcorderProfiles.add(lowSpecificProfile);
+    profiles->addProfileToPoolLocked(lowProfile, true);
+    profiles->addProfileToPoolLocked(lowSpecificProfile, true);
 
     // high camcorder profiles.
     MediaProfiles::CamcorderProfile* highProfile, *highSpecificProfile;
     createDefaultCamcorderHighProfiles(&highProfile, &highSpecificProfile);
-    profiles->mCamcorderProfiles.add(highProfile);
-    profiles->mCamcorderProfiles.add(highSpecificProfile);
+    profiles->addProfileToPoolLocked(highProfile, true);
+    profiles->addProfileToPoolLocked(highSpecificProfile, true);
 
     // low camcorder time lapse profiles.
     MediaProfiles::CamcorderProfile *lowTimeLapseProfile, *lowSpecificTimeLapseProfile;
     createDefaultCamcorderTimeLapseLowProfiles(&lowTimeLapseProfile, &lowSpecificTimeLapseProfile);
-    profiles->mCamcorderProfiles.add(lowTimeLapseProfile);
-    profiles->mCamcorderProfiles.add(lowSpecificTimeLapseProfile);
+    profiles->addProfileToPoolLocked(lowTimeLapseProfile, true);
+    profiles->addProfileToPoolLocked(lowSpecificTimeLapseProfile, true);
 
     // high camcorder time lapse profiles.
     MediaProfiles::CamcorderProfile *highTimeLapseProfile, *highSpecificTimeLapseProfile;
     createDefaultCamcorderTimeLapseHighProfiles(&highTimeLapseProfile,
             &highSpecificTimeLapseProfile);
-    profiles->mCamcorderProfiles.add(highTimeLapseProfile);
-    profiles->mCamcorderProfiles.add(highSpecificTimeLapseProfile);
+    profiles->addProfileToPoolLocked(highTimeLapseProfile, true);
+    profiles->addProfileToPoolLocked(highSpecificTimeLapseProfile, true);
 
     // For emulator and other legacy devices which does not have a
     // media_profiles.xml file, We assume that the default camera id
@@ -1240,6 +1513,30 @@ bool MediaProfiles::checkXmlFile(const char* xmlFile) {
     struct stat fStat;
     return stat(xmlFile, &fStat) == 0 && S_ISREG(fStat.st_mode);
     // TODO: Add validation
+}
+
+bool MediaProfiles::qualitySupported(camcorder_quality quality, std::string info) {
+    std::string input;
+    if (!info.empty()) {
+        input = info;
+    } else if (sCameraInfo.find("none") != std::string::npos) {
+        ALOGE("sCameraInfo:%s", sCameraInfo.c_str());
+        return false;
+    } else {
+        input = sCameraInfo;
+    }
+    switch (quality) {
+        case CAMCORDER_QUALITY_1080P:
+            return input.find("1920x1080") != std::string::npos ? true : false;
+        case CAMCORDER_QUALITY_720P:
+            return input.find("1280x720") != std::string::npos ? true : false;
+        case CAMCORDER_QUALITY_480P:
+            return input.find("640x480") != std::string::npos ? true : false;
+        case CAMCORDER_QUALITY_QVGA:
+            return input.find("320x240") != std::string::npos ? true : false;
+        default:
+            return false;
+    }
 }
 
 /*static*/ MediaProfiles*
@@ -1392,10 +1689,17 @@ Vector<audio_decoder> MediaProfiles::getAudioDecoders() const
 
 int MediaProfiles::getCamcorderProfileIndex(int cameraId, camcorder_quality quality) const
 {
+    const int effectiveId = getEffectiveCameraId(cameraId);
+    if (effectiveId < 0) {
+        return -1;
+    }
+    if (!isProfileActive(effectiveId, quality)) {
+        return -1;
+    }
     int index = -1;
     for (size_t i = 0, n = mCamcorderProfiles.size(); i < n; ++i) {
-        if (mCamcorderProfiles[i]->mCameraId == cameraId &&
-            mCamcorderProfiles[i]->mQuality == quality) {
+        const CamcorderProfile *profile = mCamcorderProfiles[i];
+        if (profile->mCameraId == effectiveId && profile->mQuality == quality) {
             index = i;
             break;
         }
@@ -1465,15 +1769,22 @@ int MediaProfiles::getCamcorderProfileParamByName(const char *name,
 
 bool MediaProfiles::hasCamcorderProfile(int cameraId, camcorder_quality quality) const
 {
-    return (getCamcorderProfileIndex(cameraId, quality) != -1);
+    {
+        Mutex::Autolock lock(sLock);
+        maybeUpdateCameraInfo(sInstance);
+    }
+    return getCamcorderProfileIndex(cameraId, quality) != -1;
 }
 
 Vector<int> MediaProfiles::getImageEncodingQualityLevels(int cameraId) const
 {
     Vector<int> result;
-    ImageEncodingQualityLevels *levels = findImageEncodingQualityLevels(cameraId);
-    if (levels != NULL) {
-        result = levels->mLevels;  // copy out
+    int effectiveCameraId = getEffectiveCameraId(cameraId);
+    if (effectiveCameraId != -1) {
+        ImageEncodingQualityLevels *levels = findImageEncodingQualityLevels(effectiveCameraId);
+        if (levels != NULL) {
+            result = levels->mLevels;
+        }
     }
     return result;
 }
