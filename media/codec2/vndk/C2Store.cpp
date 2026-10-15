@@ -1041,7 +1041,6 @@ private:
 
             struct Setter {
                 static C2R setIonUsage(bool /* mayBlock */, C2P<C2StoreIonUsageInfo> &me) {
-#ifdef __ANDROID_APEX__
                     static int32_t defaultHeapMask = [] {
                         int32_t heapmask = base::GetIntProperty(
                                 "ro.com.android.media.swcodec.ion.heapmask", int32_t(0xFFFFFFFF));
@@ -1063,12 +1062,6 @@ private:
                     me.set().heapMask = defaultHeapMask;
                     me.set().allocFlags = defaultFlags;
                     me.set().minAlignment = defaultAlign;
-#else
-                    me.set().heapMask = base::GetIntProperty(
-                                "ro.com.android.media.swcodec.ion.heapmask", int32_t(0xFFFFFFFF));
-                    me.set().allocFlags = 0;
-                    me.set().minAlignment = 0;
-#endif
                     return C2R::Ok();
                 };
 
