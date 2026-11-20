@@ -50,6 +50,7 @@
 
 using ::android::hardware::hidl_handle;
 using PixelFormat4 = ::android::hardware::graphics::common::V1_2::PixelFormat;
+using openfde::C2GraphicBufferInfo;
 
 namespace android {
 
@@ -1233,7 +1234,8 @@ public:
 
     virtual c2_status_t map(
             C2Rect c2Rect, C2MemoryUsage usage, C2Fence *fence,
-            C2PlanarLayout *layout /* nonnull */, uint8_t **addr /* nonnull */) override;
+            C2PlanarLayout *layout /* nonnull */, uint8_t **addr /* nonnull */,
+            C2GraphicBufferInfo *graphicBufferInfo = nullptr) override;
     virtual c2_status_t unmap(
             uint8_t **addr /* nonnull */, C2Rect rect, C2Fence *fence /* nullable */) override;
     virtual C2Allocator::id_t getAllocatorId() const override { return mAllocatorId; }
@@ -1316,7 +1318,8 @@ C2AllocationGralloc::~C2AllocationGralloc() {
 
 c2_status_t C2AllocationGralloc::map(
         C2Rect c2Rect, C2MemoryUsage usage, C2Fence *fence,
-        C2PlanarLayout *layout /* nonnull */, uint8_t **addr /* nonnull */) {
+        C2PlanarLayout *layout /* nonnull */, uint8_t **addr /* nonnull */,
+        C2GraphicBufferInfo *graphicBufferInfo) {
     const Rect rect{(int32_t)c2Rect.left, (int32_t)c2Rect.top,
                     (int32_t)(c2Rect.left + c2Rect.width) /* right */,
                     (int32_t)(c2Rect.top + c2Rect.height) /* bottom */};
@@ -1360,6 +1363,16 @@ c2_status_t C2AllocationGralloc::map(
         mLockedHandle = C2HandleGralloc::WrapAndMoveNativeHandle(
                 mBuffer, mWidth, mHeight, mFormat, mGrallocUsage,
                 mStride, generation, igbp_id, igbp_slot);
+    }
+
+    if (graphicBufferInfo) {
+        graphicBufferInfo->nativeHandle = mHidlHandle.getNativeHandle();
+        graphicBufferInfo->width = mWidth;
+        graphicBufferInfo->height = mHeight;
+        graphicBufferInfo->format = mFormat;
+        graphicBufferInfo->layerCount = mLayerCount;
+        graphicBufferInfo->grallocUsage = mGrallocUsage;
+        graphicBufferInfo->stride = mStride;
     }
 
     c2_status_t ret = PopulatePlaneLayout(
@@ -1578,7 +1591,8 @@ public:
 
     virtual c2_status_t map(
             C2Rect c2Rect, C2MemoryUsage usage, C2Fence *fence,
-            C2PlanarLayout *layout /* nonnull */, uint8_t **addr /* nonnull */) override;
+            C2PlanarLayout *layout /* nonnull */, uint8_t **addr /* nonnull */,
+            C2GraphicBufferInfo *graphicBufferInfo = nullptr) override;
     virtual c2_status_t unmap(
             uint8_t **addr /* nonnull */, C2Rect rect, C2Fence *fence /* nullable */) override;
     virtual C2Allocator::id_t getAllocatorId() const override { return mAllocatorId; }
@@ -1667,7 +1681,8 @@ C2AllocationAhwb::~C2AllocationAhwb() {
 
 c2_status_t C2AllocationAhwb::map(
         C2Rect c2Rect, C2MemoryUsage usage, C2Fence *fence,
-        C2PlanarLayout *layout /* nonnull */, uint8_t **addr /* nonnull */) {
+        C2PlanarLayout *layout /* nonnull */, uint8_t **addr /* nonnull */,
+        C2GraphicBufferInfo *graphicBufferInfo) {
     const Rect rect{(int32_t)c2Rect.left, (int32_t)c2Rect.top,
                     (int32_t)(c2Rect.left + c2Rect.width) /* right */,
                     (int32_t)(c2Rect.top + c2Rect.height) /* bottom */};
@@ -1678,6 +1693,7 @@ c2_status_t C2AllocationAhwb::map(
 
     // TODO
     (void)fence;
+    (void)graphicBufferInfo;
 
     std::lock_guard<std::mutex> lock(mMappedLock);
     if (mBuffer && mLocked) {
