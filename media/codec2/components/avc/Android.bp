@@ -38,7 +38,12 @@ cc_library {
 
     static_libs: ["libavcenc"],
 
-    shared_libs: ["android.media.swcodec.flags-aconfig-cc"],
+    shared_libs: [
+        "android.media.swcodec.flags-aconfig-cc",
+        "libui",
+        "libEGL",
+        "libGLESv2",
+    ],
 
     srcs: ["C2SoftAvcEnc.cpp"],
 
