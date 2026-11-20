@@ -447,10 +447,12 @@ public:
 
     c2_status_t map(
             C2Rect rect, C2MemoryUsage usage, C2Fence *fence,
-            C2PlanarLayout *layout, uint8_t **addr) override {
+            C2PlanarLayout *layout, uint8_t **addr,
+            openfde::C2GraphicBufferInfo *graphicBufferInfo = nullptr) override {
         (void)rect;
         (void)usage;
         (void)fence;
+        (void)graphicBufferInfo;
         *layout = mLayout;
         for (size_t i = 0; i < mLayout.numPlanes; ++i) {
             addr[i] = mMemory.data() + mOffsets[i];
